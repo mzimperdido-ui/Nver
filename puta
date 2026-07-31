@@ -1,823 +1,440 @@
--- SimpleUI Library
--- v2: Sidebar com Tabs + Icones Lucide (sprite sheet) + tema neutro
+--[[
+    Ocerium Controller
+    ------------------
+    Camada de lógica para a UI "Ocerium_Library.lua".
+    O arquivo original só DESENHA a interface (Instance.new em cascata),
+    ele não conecta nenhum evento. Este script:
 
-local SimpleUI = {}
-SimpleUI.__index = SimpleUI
+      1. Carrega a lib visual (loadstring do arquivo cru)
+      2. Localiza os elementos por Name (não por índice G2L, que muda a cada geração)
+      3. Conecta os eventos essenciais: fechar, minimizar, criar abas, criar botões e toggles
 
-local Players = game:GetService("Players")
+    USO:
+        local UILib = loadstring(readfile("Ocerium_Controller.lua"))()
+
+        local Window = UILib:Init()
+
+        local tab = Window:CreateTab("Home", "rbxassetid://115901920112418")
+
+        tab:CreateButton({
+            Title = "Farm Auto",
+            Desc  = "Ativa o autofarm",
+            Callback = function()
+                print("Botão clicado!")
+            end
+        })
+
+        tab:CreateToggle({
+            Title = "ESP",
+            Desc  = "Mostra os jogadores através de paredes",
+            Default = false,
+            Callback = function(state)
+                print("Toggle:", state)
+            end
+        })
+]]
+
 local UserInputService = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
 
---------------------------------------------------------------------
--- TEMA (neutro, sem cores chamativas)
---------------------------------------------------------------------
+local Library = {}
+Library.__index = Library
 
-local DEFAULT_THEME = {
-    Background = Color3.fromRGB(20, 20, 22),
-    Sidebar = Color3.fromRGB(16, 16, 18),
-    Header = Color3.fromRGB(20, 20, 22),
+-- ============================================================
+-- Utilitários
+-- ============================================================
 
-    Surface = Color3.fromRGB(28, 28, 31),
-    SurfaceHover = Color3.fromRGB(36, 36, 40),
-
-    Accent = Color3.fromRGB(120, 120, 128),      -- cinza neutro em vez de roxo
-    AccentHover = Color3.fromRGB(145, 145, 152),
-    AccentMuted = Color3.fromRGB(46, 46, 50),     -- fundo do item de tab ativo
-
-    Text = Color3.fromRGB(235, 235, 238),
-    MutedText = Color3.fromRGB(140, 140, 148),
-    FaintText = Color3.fromRGB(95, 95, 102),
-
-    Stroke = Color3.fromRGB(42, 42, 46),
-    Danger = Color3.fromRGB(200, 90, 90),
-}
-
---------------------------------------------------------------------
--- ICONES (Lucide via sprite sheet)
---------------------------------------------------------------------
--- Sprite sheet comunitario do Lucide (mesmo usado por Fluent UI).
--- Se o asset cair, troque SPRITE_SHEET_ID e reaponte o JSON de mapa,
--- ou troque toda a funcao GetIcon por outra fonte.
-
-local ICONS = {
-    SpriteSheetId = "rbxassetid://10723407389",
-    -- mapa: nome -> {offsetX, offsetY, tamanho}
-    -- adicione conforme precisar; caia no fallback se nao existir
-    Map = {
-        home = { 0, 0, 48 },
-        settings = { 48, 0, 48 },
-        user = { 96, 0, 48 },
-        list = { 144, 0, 48 },
-        star = { 192, 0, 48 },
-        info = { 240, 0, 48 },
-    },
-    FallbackSize = 48,
-}
-
-local function GetIcon(name)
-    local data = name and ICONS.Map[name]
-
-    if not data then
-        return nil
+-- Acha o primeiro descendente com esse Name (a lib original não
+-- tem caminho fixo confiável fora dos índices G2L, então buscamos por nome)
+local function find(parent, name)
+    for _, obj in ipairs(parent:GetDescendants()) do
+        if obj.Name == name then
+            return obj
+        end
     end
-
-    return {
-        Image = ICONS.SpriteSheetId,
-        Offset = Vector2.new(data[1], data[2]),
-        Size = Vector2.new(data[3], data[3]),
-    }
+    return nil
 end
 
---------------------------------------------------------------------
--- HELPERS
---------------------------------------------------------------------
-
-local function Create(className, properties)
-    local object = Instance.new(className)
-
-    for property, value in pairs(properties or {}) do
-        object[property] = value
-    end
-
-    return object
+-- Acha o primeiro FILHO direto com esse Name
+local function child(parent, name)
+    return parent:FindFirstChild(name)
 end
 
-local function AddCorner(object, radius)
-    return Create("UICorner", {
-        CornerRadius = UDim.new(0, radius or 8),
-        Parent = object,
-    })
-end
-
-local function AddStroke(object, color, transparency)
-    return Create("UIStroke", {
-        Color = color,
-        Transparency = transparency or 0,
-        Thickness = 1,
-        Parent = object,
-    })
-end
-
-local function Tween(object, properties, duration)
-    local tween = TweenService:Create(
-        object,
-        TweenInfo.new(
-            duration or 0.18,
-            Enum.EasingStyle.Quart,
-            Enum.EasingDirection.Out
-        ),
-        properties
+local function tween(obj, props, time, style, direction)
+    local info = TweenInfo.new(
+        time or 0.25,
+        style or Enum.EasingStyle.Quint,
+        direction or Enum.EasingDirection.Out
     )
-
-    tween:Play()
-
-    return tween
+    local t = TweenService:Create(obj, info, props)
+    t:Play()
+    return t
 end
 
-local function RunCallback(callback, ...)
-    if not callback then
+-- Conecta o botão "interact" (filho direto) de um elemento, com debounce
+local function onClick(element, callback)
+    local interact = element:FindFirstChild("interact")
+        or element:FindFirstChild("Interact")
+    if not interact then
+        warn("[Ocerium] 'interact' não encontrado em: " .. element:GetFullName())
         return
     end
 
-    local arguments = table.pack(...)
-
-    task.spawn(function()
-        local success, result = xpcall(function()
-            callback(table.unpack(arguments, 1, arguments.n))
-        end, debug.traceback)
-
-        if not success then
-            warn("[SimpleUI Callback Error]\n" .. tostring(result))
+    local debounce = false
+    interact.MouseButton1Click:Connect(function()
+        if debounce then return end
+        debounce = true
+        local ok, err = pcall(callback)
+        if not ok then
+            warn("[Ocerium] erro no callback de " .. element.Name .. ": " .. tostring(err))
         end
+        task.wait(0.15)
+        debounce = false
     end)
+
+    return interact
 end
 
-local function MergeTheme(customTheme)
-    local theme = table.clone(DEFAULT_THEME)
+-- ============================================================
+-- Init: monta a UI e conecta os controles fixos (topo/abas/resize)
+-- ============================================================
 
-    for key, value in pairs(customTheme or {}) do
-        theme[key] = value
+function Library:Init(sourceCode)
+    local self = setmetatable({}, Library)
+
+    -- A lib original faz: return G2L["1"], require
+    -- G2L["1"] é a ScreenGui já parentada em PlayerGui.
+    local ScreenGui, _require = loadstring(sourceCode)()
+    self.ScreenGui = ScreenGui
+
+    self.Main      = find(ScreenGui, "main")
+    self.Top       = child(self.Main, "top")
+    self.Tabs      = child(self.Main, "tabs")
+    self.TabList   = find(self.Tabs, "tab")          -- ScrollingFrame que guarda os botões de aba
+    self.Pages     = child(self.Main, "pages")
+    self.PageTemplate = find(self.Pages, "page")     -- ScrollingFrame "page" (conteúdo de uma aba)
+    self.Resize    = find(self.Main, "resize")
+    self.MiniHome  = find(ScreenGui, "minihome")
+
+    self.Tabs_ByName = {}
+    self.Open = true
+    self.Minimized = false
+
+    -- --------------------------------------------------------
+    -- Guarda os templates originais (botão de aba, Button, Toggle)
+    -- e depois os REMOVE da UI viva, porque eles vieram como
+    -- "exemplo" já visível dentro da página.
+    -- --------------------------------------------------------
+    local tabBtnTemplate = find(self.Tabs, "btn")
+    self.TabBtnTemplate = tabBtnTemplate:Clone()
+    tabBtnTemplate:Destroy()
+
+    local buttonTemplate = self.PageTemplate:FindFirstChild("Button")
+    if buttonTemplate then
+        self.ButtonTemplate = buttonTemplate:Clone()
+        buttonTemplate:Destroy()
     end
 
-    return theme
-end
-
---------------------------------------------------------------------
--- WINDOW
---------------------------------------------------------------------
-
-function SimpleUI:CreateWindow(config)
-    config = config or {}
-
-    local Window = {}
-    Window.__index = Window
-
-    Window.Title = config.Title or "Simple UI"
-    Window.Theme = MergeTheme(config.Theme)
-    Window.Connections = {}
-    Window.Destroyed = false
-    Window.Tabs = {}
-    Window.ActiveTab = nil
-
-    local Theme = Window.Theme
-
-    local function Connect(signal, callback)
-        local connection = signal:Connect(callback)
-        table.insert(Window.Connections, connection)
-        return connection
+    local toggleTemplate = self.PageTemplate:FindFirstChild("Toggle")
+    if toggleTemplate then
+        self.ToggleTemplate = toggleTemplate:Clone()
+        toggleTemplate:Destroy()
     end
 
-    local Parent = config.Parent
-
-    if not Parent then
-        local player = Players.LocalPlayer
-        assert(player, "SimpleUI precisa ser executada em um LocalScript")
-        Parent = player:WaitForChild("PlayerGui")
+    -- remove a versão de exemplo "Toggle(enabled)" se existir
+    local toggleEnabledExample = self.PageTemplate:FindFirstChild("Toggle(enabled)")
+    if toggleEnabledExample then
+        toggleEnabledExample:Destroy()
     end
 
-    local ScreenGui = Create("ScreenGui", {
-        Name = config.Name or "SimpleUI",
-        ResetOnSpawn = false,
-        ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
-        Parent = Parent,
-    })
+    -- O "page" template original também vira o template de conteúdo de aba;
+    -- clona ele vazio (sem os filhos que restaram) para reaproveitar por aba.
+    self.PageContainer = self.Pages -- onde as "page" (uma por aba) ficam dentro
 
-    local Shadow = Create("ImageLabel", {
-        Name = "Shadow",
-        Size = UDim2.new(1, 34, 1, 34),
-        Position = UDim2.fromOffset(-17, -10),
-        BackgroundTransparency = 1,
-        Image = "rbxassetid://1316045217",
-        ImageColor3 = Color3.new(0, 0, 0),
-        ImageTransparency = 0.5,
-        ScaleType = Enum.ScaleType.Slice,
-        SliceCenter = Rect.new(10, 10, 118, 118),
-    })
+    -- --------------------------------------------------------
+    -- Botões do topo: close / mini
+    -- --------------------------------------------------------
+    local functions = child(self.Top, "functions")
+    local closeBtn = child(functions, "close")
+    local miniBtn  = child(functions, "mini")
 
-    local Main = Create("Frame", {
-        Name = "Main",
-        Size = config.Size or UDim2.fromOffset(620, 400),
-        Position = UDim2.fromScale(0.5, 0.5),
-        AnchorPoint = Vector2.new(0.5, 0.5),
-        BackgroundColor3 = Theme.Background,
-        BorderSizePixel = 0,
-        ClipsDescendants = true,
-        Parent = ScreenGui,
-    })
-
-    Shadow.Parent = Main
-
-    AddCorner(Main, 10)
-    AddStroke(Main, Theme.Stroke, 0.2)
-
-    Create("UISizeConstraint", {
-        MinSize = Vector2.new(420, 300),
-        MaxSize = Vector2.new(900, 700),
-        Parent = Main,
-    })
-
-    ----------------------------------------------------------------
-    -- Header
-    ----------------------------------------------------------------
-
-    local Header = Create("Frame", {
-        Name = "Header",
-        Size = UDim2.new(1, 0, 0, 48),
-        BackgroundColor3 = Theme.Header,
-        BorderSizePixel = 0,
-        Active = true,
-        ZIndex = 3,
-        Parent = Main,
-    })
-
-    Create("Frame", {
-        Size = UDim2.new(1, 0, 0, 1),
-        Position = UDim2.new(0, 0, 1, -1),
-        BackgroundColor3 = Theme.Stroke,
-        BorderSizePixel = 0,
-        ZIndex = 3,
-        Parent = Header,
-    })
-
-    Create("TextLabel", {
-        Name = "Title",
-        Size = UDim2.new(1, -80, 1, 0),
-        Position = UDim2.fromOffset(18, 0),
-        BackgroundTransparency = 1,
-        Text = Window.Title,
-        TextColor3 = Theme.Text,
-        TextXAlignment = Enum.TextXAlignment.Left,
-        Font = Enum.Font.GothamMedium,
-        TextSize = 15,
-        ZIndex = 3,
-        Parent = Header,
-    })
-
-    local CloseButton = Create("TextButton", {
-        Name = "CloseButton",
-        Size = UDim2.fromOffset(30, 30),
-        Position = UDim2.new(1, -40, 0.5, -15),
-        BackgroundColor3 = Theme.Surface,
-        BorderSizePixel = 0,
-        AutoButtonColor = false,
-        Text = "×",
-        TextColor3 = Theme.MutedText,
-        Font = Enum.Font.GothamBold,
-        TextSize = 18,
-        ZIndex = 3,
-        Parent = Header,
-    })
-
-    AddCorner(CloseButton, 7)
-
-    ----------------------------------------------------------------
-    -- Sidebar (tabs)
-    ----------------------------------------------------------------
-
-    local SIDEBAR_WIDTH = 150
-
-    local Sidebar = Create("Frame", {
-        Name = "Sidebar",
-        Size = UDim2.new(0, SIDEBAR_WIDTH, 1, -48),
-        Position = UDim2.fromOffset(0, 48),
-        BackgroundColor3 = Theme.Sidebar,
-        BorderSizePixel = 0,
-        Parent = Main,
-    })
-
-    Create("Frame", {
-        Size = UDim2.new(0, 1, 1, 0),
-        Position = UDim2.new(1, -1, 0, 0),
-        BackgroundColor3 = Theme.Stroke,
-        BorderSizePixel = 0,
-        Parent = Sidebar,
-    })
-
-    local TabList = Create("ScrollingFrame", {
-        Name = "TabList",
-        Size = UDim2.new(1, 0, 1, 0),
-        BackgroundTransparency = 1,
-        BorderSizePixel = 0,
-        CanvasSize = UDim2.fromOffset(0, 0),
-        AutomaticCanvasSize = Enum.AutomaticSize.Y,
-        ScrollBarThickness = 0,
-        ScrollingDirection = Enum.ScrollingDirection.Y,
-        Parent = Sidebar,
-    })
-
-    Create("UIPadding", {
-        PaddingTop = UDim.new(0, 10),
-        PaddingLeft = UDim.new(0, 10),
-        PaddingRight = UDim.new(0, 10),
-        Parent = TabList,
-    })
-
-    Create("UIListLayout", {
-        Padding = UDim.new(0, 4),
-        SortOrder = Enum.SortOrder.LayoutOrder,
-        Parent = TabList,
-    })
-
-    ----------------------------------------------------------------
-    -- Content area (fica por baixo dos containers de cada tab)
-    ----------------------------------------------------------------
-
-    local ContentArea = Create("Frame", {
-        Name = "ContentArea",
-        Size = UDim2.new(1, -SIDEBAR_WIDTH, 1, -48),
-        Position = UDim2.fromOffset(SIDEBAR_WIDTH, 48),
-        BackgroundTransparency = 1,
-        BorderSizePixel = 0,
-        Parent = Main,
-    })
-
-    local function AddHover(object, normalColor, hoverColor)
-        Connect(object.MouseEnter, function()
-            Tween(object, { BackgroundColor3 = hoverColor })
-        end)
-
-        Connect(object.MouseLeave, function()
-            Tween(object, { BackgroundColor3 = normalColor })
+    if closeBtn then
+        onClick(closeBtn, function()
+            self:Toggle(false)
         end)
     end
 
-    ----------------------------------------------------------------
-    -- Tab
-    ----------------------------------------------------------------
+    if miniBtn then
+        onClick(miniBtn, function()
+            self:Minimize(true)
+        end)
+    end
 
-    function Window:AddTab(data)
-        if type(data) == "string" then
-            data = { Text = data }
+    -- abrir de novo a partir do "minihome" (botão flutuante quando minimizado)
+    if self.MiniHome then
+        local openBtn = find(self.MiniHome, "open")
+        if openBtn then
+            local quickfunc = openBtn:FindFirstChild("quickfunc")
+            if quickfunc then
+                onClick(quickfunc, function()
+                    self:Minimize(false)
+                end)
+            end
         end
+        self.MiniHome.Visible = false
+    end
 
-        data = data or {}
+    -- --------------------------------------------------------
+    -- Resize (arrastar para redimensionar) - opcional, básico
+    -- --------------------------------------------------------
+    if self.Resize then
+        local dragging = false
+        self.Resize.MouseButton1Down:Connect(function()
+            dragging = true
+        end)
+        UserInputService.InputEnded:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 then
+                dragging = false
+            end
+        end)
+        UserInputService.InputChanged:Connect(function(input)
+            if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+                local newSize = self.Main.Size + UDim2.new(0, input.Delta.X, 0, input.Delta.Y)
+                self.Main.Size = UDim2.new(
+                    0, math.max(400, newSize.X.Offset),
+                    0, math.max(300, newSize.Y.Offset)
+                )
+            end
+        end)
+    end
 
-        local Tab = {}
-        Tab.__index = Tab
+    -- --------------------------------------------------------
+    -- Arrastar a janela pela barra do topo
+    -- --------------------------------------------------------
+    do
+        local dragging = false
+        local dragStart, startPos
 
-        local TabButton = Create("TextButton", {
-            Name = "TabButton",
-            Size = UDim2.new(1, 0, 0, 34),
-            BackgroundColor3 = Theme.Sidebar,
-            BackgroundTransparency = 1,
-            BorderSizePixel = 0,
-            AutoButtonColor = false,
-            Text = "",
-            Parent = TabList,
-        })
+        self.Top.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1
+                or input.UserInputType == Enum.UserInputType.Touch then
+                dragging = true
+                dragStart = input.Position
+                startPos = self.Main.Position
+            end
+        end)
 
-        AddCorner(TabButton, 7)
+        UserInputService.InputEnded:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1
+                or input.UserInputType == Enum.UserInputType.Touch then
+                dragging = false
+            end
+        end)
 
-        local iconData = GetIcon(data.Icon)
-        local iconOffsetX = 12
+        UserInputService.InputChanged:Connect(function(input)
+            if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
+                or input.UserInputType == Enum.UserInputType.Touch) then
+                local delta = input.Position - dragStart
+                self.Main.Position = UDim2.new(
+                    startPos.X.Scale, startPos.X.Offset + delta.X,
+                    startPos.Y.Scale, startPos.Y.Offset + delta.Y
+                )
+            end
+        end)
+    end
 
-        if iconData then
-            local IconImage = Create("ImageLabel", {
-                Name = "Icon",
-                Size = UDim2.fromOffset(16, 16),
-                Position = UDim2.fromOffset(12, 9),
-                BackgroundTransparency = 1,
-                Image = iconData.Image,
-                ImageRectOffset = iconData.Offset,
-                ImageRectSize = iconData.Size,
-                ImageColor3 = Theme.MutedText,
-                Parent = TabButton,
-            })
+    return self
+end
 
-            Tab.IconInstance = IconImage
-            iconOffsetX = 36
+-- ============================================================
+-- Abrir / Fechar / Minimizar
+-- ============================================================
+
+function Library:Toggle(state)
+    self.Open = state
+    if state then
+        self.Main.Visible = true
+        self.Main.Size = UDim2.new(0, 0, 0, 0)
+        tween(self.Main, {Size = UDim2.new(0, 700, 0, 560)}, 0.3)
+    else
+        local t = tween(self.Main, {Size = UDim2.new(0, 0, 0, 0)}, 0.25)
+        t.Completed:Connect(function()
+            if not self.Open then
+                self.Main.Visible = false
+            end
+        end)
+    end
+end
+
+function Library:Minimize(state)
+    self.Minimized = state
+    self.Main.Visible = not state
+    if self.MiniHome then
+        self.MiniHome.Visible = state
+    end
+end
+
+-- ============================================================
+-- Abas
+-- ============================================================
+
+function Library:CreateTab(name, icon)
+    local tabObj = {}
+
+    -- Botão da aba (clone do template)
+    local btn = self.TabBtnTemplate:Clone()
+    btn.Name = name
+    local title = btn:FindFirstChild("title")
+    if title then title.Text = name end
+
+    local iconFrame = btn:FindFirstChild("icon")
+    if iconFrame then
+        local img = iconFrame:FindFirstChildOfClass("ImageLabel")
+        if img and icon then
+            img.Image = icon
         end
+    end
+    btn.Parent = self.TabList
 
-        local TabLabel = Create("TextLabel", {
-            Name = "Label",
-            Size = UDim2.new(1, -iconOffsetX - 10, 1, 0),
-            Position = UDim2.fromOffset(iconOffsetX, 0),
-            BackgroundTransparency = 1,
-            Text = data.Text or "Tab",
-            TextColor3 = Theme.MutedText,
-            TextXAlignment = Enum.TextXAlignment.Left,
-            Font = Enum.Font.GothamMedium,
-            TextSize = 13,
-            Parent = TabButton,
-        })
+    -- Página de conteúdo (clone do template de página, vazio)
+    local page
+    if not self._firstPageUsed then
+        -- primeira aba reaproveita o "page" original (já está no lugar certo)
+        page = self.PageTemplate
+        self._firstPageUsed = true
+    else
+        page = self.PageTemplate:Clone()
+        page.Parent = self.PageContainer
+    end
+    page.Name = name
+    page.Visible = false
 
-        local Container = Create("ScrollingFrame", {
-            Name = "Container",
-            Size = UDim2.new(1, -28, 1, -20),
-            Position = UDim2.fromOffset(14, 14),
-            BackgroundTransparency = 1,
-            BorderSizePixel = 0,
-            CanvasSize = UDim2.fromOffset(0, 0),
-            AutomaticCanvasSize = Enum.AutomaticSize.Y,
-            ScrollBarThickness = 3,
-            ScrollBarImageColor3 = Theme.Accent,
-            ScrollBarImageTransparency = 0.3,
-            ScrollingDirection = Enum.ScrollingDirection.Y,
-            Visible = false,
-            Parent = ContentArea,
-        })
+    tabObj.Page = page
+    tabObj.Button = btn
 
-        Create("UIPadding", {
-            PaddingRight = UDim.new(0, 6),
-            PaddingBottom = UDim.new(0, 8),
-            Parent = Container,
-        })
+    -- Seleciona essa aba ao clicar
+    onClick(btn, function()
+        self:SelectTab(name)
+    end)
 
-        Create("UIListLayout", {
-            Padding = UDim.new(0, 8),
-            SortOrder = Enum.SortOrder.LayoutOrder,
-            Parent = Container,
-        })
+    self.Tabs_ByName[name] = tabObj
 
-        Tab.Button = TabButton
-        Tab.Label = TabLabel
-        Tab.Container = Container
-        Tab.Name = data.Text or "Tab"
+    -- Se for a primeira aba criada, seleciona automaticamente
+    if not self.ActiveTab then
+        self:SelectTab(name)
+    end
 
-        local function SetActive(active)
-            if active then
-                Tween(TabButton, { BackgroundTransparency = 0, BackgroundColor3 = Theme.AccentMuted }, 0.12)
-                Tween(TabLabel, { TextColor3 = Theme.Text }, 0.12)
+    -- --------------------------------------------------------
+    -- API do objeto "tab" retornado
+    -- --------------------------------------------------------
+    local api = {}
 
-                if Tab.IconInstance then
-                    Tween(Tab.IconInstance, { ImageColor3 = Theme.Text }, 0.12)
-                end
+    function api:CreateButton(opts)
+        opts = opts or {}
+        local btnFrame = self.Library.ButtonTemplate:Clone()
+        btnFrame.Parent = page
 
-                Container.Visible = true
+        local titleLbl = btnFrame:FindFirstChild("title")
+        if titleLbl then titleLbl.Text = opts.Title or "Button" end
+
+        local descLbl = btnFrame:FindFirstChild("desc")
+        if descLbl then
+            if opts.Desc then
+                descLbl.Text = opts.Desc
+                descLbl.Visible = true
             else
-                Tween(TabButton, { BackgroundTransparency = 1 }, 0.12)
-                Tween(TabLabel, { TextColor3 = Theme.MutedText }, 0.12)
-
-                if Tab.IconInstance then
-                    Tween(Tab.IconInstance, { ImageColor3 = Theme.MutedText }, 0.12)
-                end
-
-                Container.Visible = false
+                descLbl.Visible = false
             end
         end
 
-        Tab.SetActive = SetActive
-
-        Connect(TabButton.MouseEnter, function()
-            if Window.ActiveTab ~= Tab then
-                Tween(TabButton, { BackgroundTransparency = 0, BackgroundColor3 = Theme.Surface }, 0.12)
-            end
+        onClick(btnFrame, function()
+            if opts.Callback then opts.Callback() end
         end)
 
-        Connect(TabButton.MouseLeave, function()
-            if Window.ActiveTab ~= Tab then
-                Tween(TabButton, { BackgroundTransparency = 1 }, 0.12)
+        return btnFrame
+    end
+
+    function api:CreateToggle(opts)
+        opts = opts or {}
+        local togFrame = self.Library.ToggleTemplate:Clone()
+        togFrame.Parent = page
+
+        local titleLbl = togFrame:FindFirstChild("title")
+        if titleLbl then titleLbl.Text = opts.Title or "Toggle" end
+
+        local descLbl = togFrame:FindFirstChild("desc")
+        if descLbl then
+            if opts.Desc then
+                descLbl.Text = opts.Desc
+                descLbl.Visible = true
+            else
+                descLbl.Visible = false
             end
+        end
+
+        local tog = togFrame:FindFirstChild("tog")
+        local check = tog and tog:FindFirstChild("check")
+        local glow = tog and tog:FindFirstChild("glow")
+
+        local state = opts.Default or false
+
+        local function render(instant)
+            local goalBg = state and Color3.fromRGB(91, 204, 255) or Color3.fromRGB(29, 29, 29)
+            local goalCheckTr = state and 0 or 1
+            local goalGlowTr = state and 0.7 or 1
+
+            if instant then
+                if tog then tog.BackgroundColor3 = goalBg end
+                if check then check.ImageTransparency = goalCheckTr end
+                if glow then glow.ImageTransparency = goalGlowTr end
+            else
+                if tog then tween(tog, {BackgroundColor3 = goalBg}, 0.2) end
+                if check then tween(check, {ImageTransparency = goalCheckTr}, 0.2) end
+                if glow then tween(glow, {ImageTransparency = goalGlowTr}, 0.2) end
+            end
+        end
+
+        render(true)
+
+        onClick(togFrame, function()
+            state = not state
+            render(false)
+            if opts.Callback then opts.Callback(state) end
         end)
 
-        Connect(TabButton.MouseButton1Click, function()
-            Window:SelectTab(Tab)
-        end)
-
-        table.insert(Window.Tabs, Tab)
-
-        -- primeira tab adicionada vira a ativa automaticamente
-        if not Window.ActiveTab then
-            Window:SelectTab(Tab)
-        end
-
-        ------------------------------------------------------------
-        -- Componentes (mesma API de antes, agora por Tab)
-        ------------------------------------------------------------
-
-        function Tab:AddSection(text)
-            local Section = Create("TextLabel", {
-                Name = "Section",
-                Size = UDim2.new(1, 0, 0, 26),
-                BackgroundTransparency = 1,
-                Text = string.upper(text or "SECTION"),
-                TextColor3 = Theme.FaintText,
-                TextXAlignment = Enum.TextXAlignment.Left,
-                TextYAlignment = Enum.TextYAlignment.Bottom,
-                Font = Enum.Font.GothamBold,
-                TextSize = 11,
-                Parent = Container,
-            })
-
-            Create("UIPadding", {
-                PaddingLeft = UDim.new(0, 4),
-                Parent = Section,
-            })
-
-            return Section
-        end
-
-        function Tab:AddLabel(data2)
-            if type(data2) == "string" then
-                data2 = { Text = data2 }
-            end
-
-            data2 = data2 or {}
-
-            local Label = Create("TextLabel", {
-                Name = "Label",
-                Size = UDim2.new(1, 0, 0, data2.Height or 30),
-                BackgroundTransparency = 1,
-                Text = data2.Text or "Label",
-                TextColor3 = data2.Color or Theme.MutedText,
-                TextXAlignment = Enum.TextXAlignment.Left,
-                TextWrapped = true,
-                Font = Enum.Font.Gotham,
-                TextSize = 13,
-                Parent = Container,
-            })
-
-            Create("UIPadding", {
-                PaddingLeft = UDim.new(0, 4),
-                PaddingRight = UDim.new(0, 4),
-                Parent = Label,
-            })
-
-            local Controller = {}
-
-            function Controller:SetText(text)
-                Label.Text = tostring(text)
-            end
-
-            function Controller:SetVisible(visible)
-                Label.Visible = visible
-            end
-
-            function Controller:Destroy()
-                Label:Destroy()
-            end
-
-            Controller.Instance = Label
-
-            return Controller
-        end
-
-        function Tab:AddButton(data2)
-            data2 = data2 or {}
-
-            local Button = Create("TextButton", {
-                Name = "Button",
-                Size = UDim2.new(1, 0, 0, data2.Height or 38),
-                BackgroundColor3 = Theme.Surface,
-                BorderSizePixel = 0,
-                AutoButtonColor = false,
-                Text = "",
-                Parent = Container,
-            })
-
-            AddCorner(Button, 7)
-            AddStroke(Button, Theme.Stroke, 0.4)
-            AddHover(Button, Theme.Surface, Theme.SurfaceHover)
-
-            Create("TextLabel", {
-                Size = UDim2.new(1, -42, 1, 0),
-                Position = UDim2.fromOffset(14, 0),
-                BackgroundTransparency = 1,
-                Text = data2.Text or "Button",
-                TextColor3 = Theme.Text,
-                TextXAlignment = Enum.TextXAlignment.Left,
-                Font = Enum.Font.GothamMedium,
-                TextSize = 13,
-                Parent = Button,
-            })
-
-            Connect(Button.MouseButton1Click, function()
-                RunCallback(data2.Callback)
-            end)
-
-            local Controller = {}
-
-            function Controller:SetVisible(visible)
-                Button.Visible = visible
-            end
-
-            function Controller:Destroy()
-                Button:Destroy()
-            end
-
-            Controller.Instance = Button
-
-            return Controller
-        end
-
-        function Tab:AddToggle(data2)
-            data2 = data2 or {}
-
-            local State = data2.Default == true
-
-            local ToggleFrame = Create("TextButton", {
-                Name = "Toggle",
-                Size = UDim2.new(1, 0, 0, data2.Description and 52 or 40),
-                BackgroundColor3 = Theme.Surface,
-                BorderSizePixel = 0,
-                AutoButtonColor = false,
-                Text = "",
-                Parent = Container,
-            })
-
-            AddCorner(ToggleFrame, 7)
-            AddStroke(ToggleFrame, Theme.Stroke, 0.4)
-            AddHover(ToggleFrame, Theme.Surface, Theme.SurfaceHover)
-
-            Create("TextLabel", {
-                Size = UDim2.new(1, -76, 0, data2.Description and 28 or 40),
-                Position = UDim2.fromOffset(14, 0),
-                BackgroundTransparency = 1,
-                Text = data2.Text or "Toggle",
-                TextColor3 = Theme.Text,
-                TextXAlignment = Enum.TextXAlignment.Left,
-                Font = Enum.Font.GothamMedium,
-                TextSize = 13,
-                Parent = ToggleFrame,
-            })
-
-            if data2.Description then
-                Create("TextLabel", {
-                    Size = UDim2.new(1, -90, 0, 18),
-                    Position = UDim2.fromOffset(14, 26),
-                    BackgroundTransparency = 1,
-                    Text = data2.Description,
-                    TextColor3 = Theme.MutedText,
-                    TextXAlignment = Enum.TextXAlignment.Left,
-                    TextTruncate = Enum.TextTruncate.AtEnd,
-                    Font = Enum.Font.Gotham,
-                    TextSize = 11,
-                    Parent = ToggleFrame,
-                })
-            end
-
-            local Track = Create("Frame", {
-                Size = UDim2.fromOffset(40, 20),
-                Position = UDim2.new(1, -54, 0.5, -10),
-                BackgroundColor3 = State and Theme.Accent or Theme.Stroke,
-                BorderSizePixel = 0,
-                Parent = ToggleFrame,
-            })
-
-            AddCorner(Track, 10)
-
-            local Knob = Create("Frame", {
-                Size = UDim2.fromOffset(14, 14),
-                Position = State and UDim2.new(1, -17, 0, 3) or UDim2.fromOffset(3, 3),
-                BackgroundColor3 = Color3.fromRGB(255, 255, 255),
-                BorderSizePixel = 0,
-                Parent = Track,
-            })
-
-            AddCorner(Knob, 7)
-
-            local Controller = {}
-
-            function Controller:Set(value, callCallback)
-                State = value == true
-
-                Tween(Track, { BackgroundColor3 = State and Theme.Accent or Theme.Stroke })
-                Tween(Knob, { Position = State and UDim2.new(1, -17, 0, 3) or UDim2.fromOffset(3, 3) })
-
-                if callCallback ~= false then
-                    RunCallback(data2.Callback, State)
-                end
-            end
-
-            function Controller:Get()
-                return State
-            end
-
-            function Controller:SetVisible(visible)
-                ToggleFrame.Visible = visible
-            end
-
-            function Controller:Destroy()
-                ToggleFrame:Destroy()
-            end
-
-            Connect(ToggleFrame.MouseButton1Click, function()
-                Controller:Set(not State)
-            end)
-
-            Controller.Instance = ToggleFrame
-
-            return Controller
-        end
-
-        return Tab
+        return {
+            Frame = togFrame,
+            Set = function(_, newState)
+                state = newState
+                render(false)
+                if opts.Callback then opts.Callback(state) end
+            end,
+            Get = function()
+                return state
+            end,
+        }
     end
 
-    function Window:SelectTab(tab)
-        if Window.ActiveTab == tab then
-            return
-        end
-
-        if Window.ActiveTab then
-            Window.ActiveTab.SetActive(false)
-        end
-
-        Window.ActiveTab = tab
-        tab.SetActive(true)
-    end
-
-    ----------------------------------------------------------------
-    -- Drag (mouse + touch) -- corrigido para nao empilhar conexoes
-    ----------------------------------------------------------------
-
-    local Dragging = false
-    local DragInput
-    local DragStart
-    local StartPosition
-    local DragEndConnection
-
-    Connect(Header.InputBegan, function(input)
-        local inputType = input.UserInputType
-
-        if inputType == Enum.UserInputType.MouseButton1
-            or inputType == Enum.UserInputType.Touch then
-
-            Dragging = true
-            DragStart = input.Position
-            StartPosition = Main.Position
-
-            if DragEndConnection then
-                DragEndConnection:Disconnect()
-            end
-
-            DragEndConnection = input.Changed:Connect(function()
-                if input.UserInputState == Enum.UserInputState.End then
-                    Dragging = false
-                end
-            end)
-        end
-    end)
-
-    Connect(Header.InputChanged, function(input)
-        local inputType = input.UserInputType
-
-        if inputType == Enum.UserInputType.MouseMovement
-            or inputType == Enum.UserInputType.Touch then
-
-            DragInput = input
-        end
-    end)
-
-    Connect(UserInputService.InputChanged, function(input)
-        if Dragging and input == DragInput then
-            local delta = input.Position - DragStart
-
-            Main.Position = UDim2.new(
-                StartPosition.X.Scale,
-                StartPosition.X.Offset + delta.X,
-                StartPosition.Y.Scale,
-                StartPosition.Y.Offset + delta.Y
-            )
-        end
-    end)
-
-    ----------------------------------------------------------------
-    -- Window controls
-    ----------------------------------------------------------------
-
-    function Window:SetVisible(visible)
-        ScreenGui.Enabled = visible
-    end
-
-    function Window:ToggleVisibility()
-        ScreenGui.Enabled = not ScreenGui.Enabled
-    end
-
-    function Window:Destroy()
-        if Window.Destroyed then
-            return
-        end
-
-        Window.Destroyed = true
-
-        for _, connection in ipairs(Window.Connections) do
-            if connection.Connected then
-                connection:Disconnect()
-            end
-        end
-
-        table.clear(Window.Connections)
-
-        Tween(Main, {
-            Size = UDim2.fromOffset(520, 340),
-            BackgroundTransparency = 1,
-        }, 0.15)
-
-        task.delay(0.16, function()
-            ScreenGui:Destroy()
-        end)
-    end
-
-    AddHover(CloseButton, Theme.Surface, Theme.Danger)
-
-    Connect(CloseButton.MouseButton1Click, function()
-        Window:Destroy()
-    end)
-
-    Window.Gui = ScreenGui
-    Window.Main = Main
-
-    return Window
+    api.Library = self
+    return api
 end
 
-return SimpleUI
+function Library:SelectTab(name)
+    for tabName, tabObj in pairs(self.Tabs_ByName) do
+        local isActive = tabName == name
+        tabObj.Page.Visible = isActive
+
+        local indicator = tabObj.Button:FindFirstChild("indicator")
+        if indicator then
+            tween(indicator, {BackgroundTransparency = isActive and 0 or 1}, 0.2)
+        end
+
+        local titleLbl = tabObj.Button:FindFirstChild("title")
+        if titleLbl then
+            tween(titleLbl, {TextTransparency = isActive and 0 or 0.4}, 0.2)
+        end
+    end
+    self.ActiveTab = name
+end
+
+return Library
