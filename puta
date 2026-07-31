@@ -1,217 +1,617 @@
 -- SimpleUI Library
--- Single file version
+-- Improved single-file version
 
 local SimpleUI = {}
-
 SimpleUI.__index = SimpleUI
 
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+
+local DEFAULT_THEME = {
+    Background = Color3.fromRGB(17, 17, 21),
+    Header = Color3.fromRGB(21, 21, 26),
+
+    Surface = Color3.fromRGB(29, 29, 35),
+    SurfaceHover = Color3.fromRGB(37, 37, 45),
+
+    Accent = Color3.fromRGB(117, 87, 255),
+    AccentHover = Color3.fromRGB(132, 104, 255),
+
+    Text = Color3.fromRGB(240, 240, 245),
+    MutedText = Color3.fromRGB(155, 155, 165),
+
+    Stroke = Color3.fromRGB(48, 48, 58),
+    Danger = Color3.fromRGB(235, 75, 75),
+}
+
+local function Create(className, properties)
+    local object = Instance.new(className)
+
+    for property, value in pairs(properties or {}) do
+        object[property] = value
+    end
+
+    return object
+end
+
+local function AddCorner(object, radius)
+    return Create("UICorner", {
+        CornerRadius = UDim.new(0, radius or 8),
+        Parent = object,
+    })
+end
+
+local function AddStroke(object, color, transparency)
+    return Create("UIStroke", {
+        Color = color,
+        Transparency = transparency or 0,
+        Thickness = 1,
+        Parent = object,
+    })
+end
+
+local function Tween(object, properties, duration)
+    local tween = TweenService:Create(
+        object,
+        TweenInfo.new(
+            duration or 0.18,
+            Enum.EasingStyle.Quart,
+            Enum.EasingDirection.Out
+        ),
+        properties
+    )
+
+    tween:Play()
+
+    return tween
+end
+
+local function RunCallback(callback, ...)
+    if not callback then
+        return
+    end
+
+    local arguments = table.pack(...)
+
+    task.spawn(function()
+        local success, result = xpcall(function()
+            callback(table.unpack(arguments, 1, arguments.n))
+        end, debug.traceback)
+
+        if not success then
+            warn("[SimpleUI Callback Error]\n" .. tostring(result))
+        end
+    end)
+end
+
+local function MergeTheme(customTheme)
+    local theme = table.clone(DEFAULT_THEME)
+
+    for key, value in pairs(customTheme or {}) do
+        theme[key] = value
+    end
+
+    return theme
+end
 
 function SimpleUI:CreateWindow(config)
+    config = config or {}
 
     local Window = {}
     Window.__index = Window
 
     Window.Title = config.Title or "Simple UI"
-    Window.Tabs = {}
+    Window.Theme = MergeTheme(config.Theme)
+    Window.Connections = {}
+    Window.Destroyed = false
 
-    local ScreenGui = Instance.new("ScreenGui")
-    ScreenGui.Name = "SimpleUI"
-    ScreenGui.ResetOnSpawn = false
+    local Theme = Window.Theme
 
+    local function Connect(signal, callback)
+        local connection = signal:Connect(callback)
 
-    local Main = Instance.new("Frame")
-    Main.Size = UDim2.fromOffset(500,350)
-    Main.Position = UDim2.fromScale(0.5,0.5)
-    Main.AnchorPoint = Vector2.new(.5,.5)
-    Main.BackgroundColor3 = Color3.fromRGB(25,25,25)
-    Main.BorderSizePixel = 0
-    Main.Parent = ScreenGui
+        table.insert(Window.Connections, connection)
 
+        return connection
+    end
 
-    local Title = Instance.new("TextLabel")
-    Title.Size = UDim2.new(1,0,0,40)
-    Title.Text = Window.Title
-    Title.TextColor3 = Color3.new(1,1,1)
-    Title.BackgroundTransparency = 1
-    Title.Font = Enum.Font.GothamBold
-    Title.TextSize = 18
-    Title.Parent = Main
+    local Parent = config.Parent
 
+    if not Parent then
+        local player = Players.LocalPlayer
 
-    local Container = Instance.new("Frame")
-    Container.Position = UDim2.fromOffset(20,50)
-    Container.Size = UDim2.new(1,-40,1,-70)
-    Container.BackgroundTransparency = 1
-    Container.Parent = Main
+        assert(player, "SimpleUI precisa ser executada em um LocalScript")
 
+        Parent = player:WaitForChild("PlayerGui")
+    end
 
-    local Layout = Instance.new("UIListLayout")
-    Layout.Padding = UDim.new(0,8)
-    Layout.Parent = Container
+    local ScreenGui = Create("ScreenGui", {
+        Name = config.Name or "SimpleUI",
+        ResetOnSpawn = false,
+        IgnoreGuiInset = false,
+        ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+        Parent = Parent,
+    })
 
+    local Shadow = Create("ImageLabel", {
+        Name = "Shadow",
+        Size = UDim2.new(1, 34, 1, 34),
+        Position = UDim2.fromOffset(-17, -10),
+        BackgroundTransparency = 1,
+        Image = "rbxassetid://1316045217",
+        ImageColor3 = Color3.new(0, 0, 0),
+        ImageTransparency = 0.45,
+        ScaleType = Enum.ScaleType.Slice,
+        SliceCenter = Rect.new(10, 10, 118, 118),
+    })
 
+    local Main = Create("Frame", {
+        Name = "Main",
+        Size = config.Size or UDim2.fromOffset(520, 380),
+        Position = UDim2.fromScale(0.5, 0.5),
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        BackgroundColor3 = Theme.Background,
+        BorderSizePixel = 0,
+        ClipsDescendants = true,
+        Parent = ScreenGui,
+    })
+
+    Shadow.Parent = Main
+
+    AddCorner(Main, 12)
+    AddStroke(Main, Theme.Stroke, 0.25)
+
+    Create("UISizeConstraint", {
+        MinSize = Vector2.new(360, 260),
+        MaxSize = Vector2.new(800, 650),
+        Parent = Main,
+    })
+
+    local Header = Create("Frame", {
+        Name = "Header",
+        Size = UDim2.new(1, 0, 0, 52),
+        BackgroundColor3 = Theme.Header,
+        BorderSizePixel = 0,
+        Active = true,
+        Parent = Main,
+    })
+
+    local HeaderSeparator = Create("Frame", {
+        Size = UDim2.new(1, 0, 0, 1),
+        Position = UDim2.new(0, 0, 1, -1),
+        BackgroundColor3 = Theme.Stroke,
+        BorderSizePixel = 0,
+        Parent = Header,
+    })
+
+    local Title = Create("TextLabel", {
+        Name = "Title",
+        Size = UDim2.new(1, -80, 1, 0),
+        Position = UDim2.fromOffset(18, 0),
+        BackgroundTransparency = 1,
+        Text = Window.Title,
+        TextColor3 = Theme.Text,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        Font = Enum.Font.GothamBold,
+        TextSize = 17,
+        Parent = Header,
+    })
+
+    local CloseButton = Create("TextButton", {
+        Name = "CloseButton",
+        Size = UDim2.fromOffset(32, 32),
+        Position = UDim2.new(1, -42, 0.5, -16),
+        BackgroundColor3 = Theme.Surface,
+        BorderSizePixel = 0,
+        AutoButtonColor = false,
+        Text = "×",
+        TextColor3 = Theme.MutedText,
+        Font = Enum.Font.GothamBold,
+        TextSize = 20,
+        Parent = Header,
+    })
+
+    AddCorner(CloseButton, 8)
+
+    local Container = Create("ScrollingFrame", {
+        Name = "Container",
+        Position = UDim2.fromOffset(14, 66),
+        Size = UDim2.new(1, -28, 1, -80),
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+
+        CanvasSize = UDim2.fromOffset(0, 0),
+        AutomaticCanvasSize = Enum.AutomaticSize.Y,
+
+        ScrollBarThickness = 3,
+        ScrollBarImageColor3 = Theme.Accent,
+        ScrollBarImageTransparency = 0.2,
+
+        ScrollingDirection = Enum.ScrollingDirection.Y,
+        Parent = Main,
+    })
+
+    Create("UIPadding", {
+        PaddingRight = UDim.new(0, 6),
+        PaddingBottom = UDim.new(0, 8),
+        Parent = Container,
+    })
+
+    Create("UIListLayout", {
+        Padding = UDim.new(0, 8),
+        SortOrder = Enum.SortOrder.LayoutOrder,
+        Parent = Container,
+    })
+
+    local function AddHover(object, normalColor, hoverColor)
+        Connect(object.MouseEnter, function()
+            Tween(object, {
+                BackgroundColor3 = hoverColor,
+            })
+        end)
+
+        Connect(object.MouseLeave, function()
+            Tween(object, {
+                BackgroundColor3 = normalColor,
+            })
+        end)
+    end
+
+    function Window:AddSection(text)
+        local Section = Create("TextLabel", {
+            Name = "Section",
+            Size = UDim2.new(1, 0, 0, 28),
+            BackgroundTransparency = 1,
+            Text = string.upper(text or "SECTION"),
+            TextColor3 = Theme.MutedText,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            TextYAlignment = Enum.TextYAlignment.Bottom,
+            Font = Enum.Font.GothamBold,
+            TextSize = 11,
+            Parent = Container,
+        })
+
+        Create("UIPadding", {
+            PaddingLeft = UDim.new(0, 4),
+            Parent = Section,
+        })
+
+        return Section
+    end
+
+    function Window:AddLabel(data)
+        if type(data) == "string" then
+            data = {
+                Text = data,
+            }
+        end
+
+        data = data or {}
+
+        local Label = Create("TextLabel", {
+            Name = "Label",
+            Size = UDim2.new(1, 0, 0, data.Height or 32),
+            BackgroundTransparency = 1,
+            Text = data.Text or "Label",
+            TextColor3 = data.Color or Theme.MutedText,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            TextWrapped = true,
+            Font = Enum.Font.Gotham,
+            TextSize = 13,
+            Parent = Container,
+        })
+
+        Create("UIPadding", {
+            PaddingLeft = UDim.new(0, 4),
+            PaddingRight = UDim.new(0, 4),
+            Parent = Label,
+        })
+
+        local Controller = {}
+
+        function Controller:SetText(text)
+            Label.Text = tostring(text)
+        end
+
+        function Controller:SetVisible(visible)
+            Label.Visible = visible
+        end
+
+        function Controller:Destroy()
+            Label:Destroy()
+        end
+
+        Controller.Instance = Label
+
+        return Controller
+    end
 
     function Window:AddButton(data)
+        data = data or {}
 
-        local Button = Instance.new("TextButton")
+        local Button = Create("TextButton", {
+            Name = "Button",
+            Size = UDim2.new(1, 0, 0, data.Height or 40),
+            BackgroundColor3 = Theme.Surface,
+            BorderSizePixel = 0,
+            AutoButtonColor = false,
+            Text = "",
+            Parent = Container,
+        })
 
-        Button.Size = UDim2.new(1,0,0,35)
-        Button.BackgroundColor3 =
-            Color3.fromRGB(45,45,45)
+        AddCorner(Button, 8)
+        AddStroke(Button, Theme.Stroke, 0.45)
+        AddHover(Button, Theme.Surface, Theme.SurfaceHover)
 
-        Button.Text = data.Text or "Button"
-        Button.TextColor3 = Color3.new(1,1,1)
+        local ButtonText = Create("TextLabel", {
+            Size = UDim2.new(1, -42, 1, 0),
+            Position = UDim2.fromOffset(14, 0),
+            BackgroundTransparency = 1,
+            Text = data.Text or "Button",
+            TextColor3 = Theme.Text,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            Font = Enum.Font.GothamMedium,
+            TextSize = 14,
+            Parent = Button,
+        })
 
-        Button.Font = Enum.Font.Gotham
-        Button.TextSize = 14
+        Create("TextLabel", {
+            Size = UDim2.fromOffset(20, 20),
+            Position = UDim2.new(1, -32, 0.5, -10),
+            BackgroundTransparency = 1,
+            Text = "›",
+            TextColor3 = Theme.MutedText,
+            Font = Enum.Font.GothamBold,
+            TextSize = 20,
+            Parent = Button,
+        })
 
-        Button.Parent = Container
-
-
-        Button.MouseButton1Click:Connect(function()
-
-            if data.Callback then
-                data.Callback()
-            end
-
+        Connect(Button.MouseButton1Down, function()
+            Tween(Button, {
+                BackgroundColor3 = Theme.Accent,
+            }, 0.08)
         end)
 
+        Connect(Button.MouseButton1Up, function()
+            Tween(Button, {
+                BackgroundColor3 = Theme.SurfaceHover,
+            }, 0.12)
+        end)
 
-        return Button
+        Connect(Button.MouseButton1Click, function()
+            RunCallback(data.Callback)
+        end)
+
+        local Controller = {}
+
+        function Controller:SetText(text)
+            ButtonText.Text = tostring(text)
+        end
+
+        function Controller:SetVisible(visible)
+            Button.Visible = visible
+        end
+
+        function Controller:SetEnabled(enabled)
+            Button.Active = enabled
+            ButtonText.TextTransparency = enabled and 0 or 0.5
+        end
+
+        function Controller:Destroy()
+            Button:Destroy()
+        end
+
+        Controller.Instance = Button
+
+        return Controller
     end
-
-
 
     function Window:AddToggle(data)
+        data = data or {}
 
-        local State = false
+        local State = data.Default == true
 
+        local Toggle = Create("TextButton", {
+            Name = "Toggle",
+            Size = UDim2.new(1, 0, 0, data.Description and 54 or 42),
+            BackgroundColor3 = Theme.Surface,
+            BorderSizePixel = 0,
+            AutoButtonColor = false,
+            Text = "",
+            Parent = Container,
+        })
 
-        local Toggle = Instance.new("TextButton")
+        AddCorner(Toggle, 8)
+        AddStroke(Toggle, Theme.Stroke, 0.45)
+        AddHover(Toggle, Theme.Surface, Theme.SurfaceHover)
 
-        Toggle.Size = UDim2.new(1,0,0,35)
-        Toggle.BackgroundColor3 =
-            Color3.fromRGB(45,45,45)
+        local ToggleText = Create("TextLabel", {
+            Size = UDim2.new(1, -76, 0, data.Description and 30 or 42),
+            Position = UDim2.fromOffset(14, 0),
+            BackgroundTransparency = 1,
+            Text = data.Text or "Toggle",
+            TextColor3 = Theme.Text,
+            TextXAlignment = Enum.TextXAlignment.Left,
+            Font = Enum.Font.GothamMedium,
+            TextSize = 14,
+            Parent = Toggle,
+        })
 
-        Toggle.Text =
-            (data.Text or "Toggle").." : OFF"
+        if data.Description then
+            Create("TextLabel", {
+                Size = UDim2.new(1, -90, 0, 20),
+                Position = UDim2.fromOffset(14, 28),
+                BackgroundTransparency = 1,
+                Text = data.Description,
+                TextColor3 = Theme.MutedText,
+                TextXAlignment = Enum.TextXAlignment.Left,
+                TextTruncate = Enum.TextTruncate.AtEnd,
+                Font = Enum.Font.Gotham,
+                TextSize = 11,
+                Parent = Toggle,
+            })
+        end
 
-        Toggle.TextColor3 =
-            Color3.new(1,1,1)
+        local Track = Create("Frame", {
+            Size = UDim2.fromOffset(42, 22),
+            Position = UDim2.new(1, -56, 0.5, -11),
+            BackgroundColor3 = State and Theme.Accent or Theme.Stroke,
+            BorderSizePixel = 0,
+            Parent = Toggle,
+        })
 
-        Toggle.Parent = Container
+        AddCorner(Track, 11)
 
+        local Knob = Create("Frame", {
+            Size = UDim2.fromOffset(16, 16),
+            Position = State
+                and UDim2.new(1, -19, 0, 3)
+                or UDim2.fromOffset(3, 3),
 
+            BackgroundColor3 = Color3.fromRGB(255, 255, 255),
+            BorderSizePixel = 0,
+            Parent = Track,
+        })
 
-        Toggle.MouseButton1Click:Connect(function()
+        AddCorner(Knob, 8)
 
-            State = not State
+        local Controller = {}
 
+        function Controller:Set(value, callCallback)
+            State = value == true
 
-            Toggle.Text =
-                (data.Text or "Toggle")
-                .." : "
-                ..(State and "ON" or "OFF")
+            Tween(Track, {
+                BackgroundColor3 = State and Theme.Accent or Theme.Stroke,
+            })
 
+            Tween(Knob, {
+                Position = State
+                    and UDim2.new(1, -19, 0, 3)
+                    or UDim2.fromOffset(3, 3),
+            })
 
-            if data.Callback then
-                data.Callback(State)
+            if callCallback ~= false then
+                RunCallback(data.Callback, State)
             end
+        end
 
+        function Controller:Get()
+            return State
+        end
+
+        function Controller:SetText(text)
+            ToggleText.Text = tostring(text)
+        end
+
+        function Controller:SetVisible(visible)
+            Toggle.Visible = visible
+        end
+
+        function Controller:Destroy()
+            Toggle:Destroy()
+        end
+
+        Connect(Toggle.MouseButton1Click, function()
+            Controller:Set(not State)
         end)
 
+        Controller.Instance = Toggle
 
-        return Toggle
-
+        return Controller
     end
 
+    -- Drag para mouse e touch
+    local Dragging = false
+    local DragInput
+    local DragStart
+    local StartPosition
 
+    Connect(Header.InputBegan, function(input)
+        local inputType = input.UserInputType
 
-    function Window:AddLabel(text)
+        if inputType == Enum.UserInputType.MouseButton1
+            or inputType == Enum.UserInputType.Touch then
 
-        local Label = Instance.new("TextLabel")
+            Dragging = true
+            DragStart = input.Position
+            StartPosition = Main.Position
 
-        Label.Size = UDim2.new(1,0,0,30)
-        Label.BackgroundTransparency = 1
-        Label.Text = text
-        Label.TextColor3 =
-            Color3.new(1,1,1)
+            Connect(input.Changed, function()
+                if input.UserInputState == Enum.UserInputState.End then
+                    Dragging = false
+                end
+            end)
+        end
+    end)
 
-        Label.Parent = Container
+    Connect(Header.InputChanged, function(input)
+        local inputType = input.UserInputType
 
+        if inputType == Enum.UserInputType.MouseMovement
+            or inputType == Enum.UserInputType.Touch then
 
-        return Label
+            DragInput = input
+        end
+    end)
+
+    Connect(UserInputService.InputChanged, function(input)
+        if Dragging and input == DragInput then
+            local delta = input.Position - DragStart
+
+            Main.Position = UDim2.new(
+                StartPosition.X.Scale,
+                StartPosition.X.Offset + delta.X,
+                StartPosition.Y.Scale,
+                StartPosition.Y.Offset + delta.Y
+            )
+        end
+    end)
+
+    function Window:SetVisible(visible)
+        ScreenGui.Enabled = visible
     end
 
+    function Window:ToggleVisibility()
+        ScreenGui.Enabled = not ScreenGui.Enabled
+    end
 
-
-    -- Drag simples
-    local UIS = game:GetService("UserInputService")
-
-    local dragging = false
-    local dragStart
-    local startPos
-
-
-    Title.InputBegan:Connect(function(input)
-
-        if input.UserInputType ==
-        Enum.UserInputType.MouseButton1 then
-
-            dragging = true
-            dragStart = input.Position
-            startPos = Main.Position
-
+    function Window:Destroy()
+        if Window.Destroyed then
+            return
         end
 
-    end)
+        Window.Destroyed = true
 
-
-    UIS.InputChanged:Connect(function(input)
-
-        if dragging and
-        input.UserInputType ==
-        Enum.UserInputType.MouseMovement then
-
-            local delta =
-                input.Position - dragStart
-
-            Main.Position =
-                UDim2.new(
-                    startPos.X.Scale,
-                    startPos.X.Offset + delta.X,
-                    startPos.Y.Scale,
-                    startPos.Y.Offset + delta.Y
-                )
-
+        for _, connection in ipairs(Window.Connections) do
+            if connection.Connected then
+                connection:Disconnect()
+            end
         end
 
+        table.clear(Window.Connections)
+
+        Tween(Main, {
+            Size = UDim2.fromOffset(460, 320),
+            BackgroundTransparency = 1,
+        }, 0.15)
+
+        task.delay(0.16, function()
+            ScreenGui:Destroy()
+        end)
+    end
+
+    AddHover(CloseButton, Theme.Surface, Theme.Danger)
+
+    Connect(CloseButton.MouseButton1Click, function()
+        Window:Destroy()
     end)
-
-
-    UIS.InputEnded:Connect(function(input)
-
-        if input.UserInputType ==
-        Enum.UserInputType.MouseButton1 then
-
-            dragging = false
-
-        end
-
-    end)
-
-
-
-    ScreenGui.Parent = game:GetService("CoreGui")
-
 
     Window.Gui = ScreenGui
     Window.Main = Main
-
+    Window.Container = Container
 
     return Window
 end
-
-
 
 return SimpleUI
