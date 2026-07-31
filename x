@@ -2900,6 +2900,9 @@ do
 	end
 end
 
+_G.GLOBAL_ENV = _G.GLOBAL_ENV or {}
+local GLOBAL_ENV = _G.GLOBAL_ENV
+
 local function synsaveinstance(CustomOptions, CustomOptions2)
 	if GLOBAL_ENV.USSI then
 		return
