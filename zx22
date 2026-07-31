@@ -4221,77 +4221,49 @@ end
 										value = "-- Ignored"
 									else
 										local should_decompile = true
-										local LinkedSource
-										local o, LinkedSource_Url = pcall(index, instance, "LinkedSource") -- ! AuroraScript has Source but not LinkedSource
-										if not o then
+										local LinkedSource, LinkedSource_type
+										local ok, LinkedSource_Url = pcall(index, instance, "LinkedSource") -- ! AuroraScript has Source but not LinkedSource
+										if not ok then
 											LinkedSource_Url = ""
 										end
 										local hasLinkedSource = LinkedSource_Url ~= ""
-										local LinkedSource_type
-                                            if hasLinkedSource then
-                                        local Path = instance:GetFullName()
-                                            if RecoveredScripts then
-                                              table.insert(RecoveredScripts, Path)
-                                        end
 
-                                        LinkedSource = string.match(LinkedSource_Url, "%w+$") -- extrai id ou hash
-                                        if LinkedSource then
-                                     -- 1. Verifica cache do fonte original
-                                        if ScriptCache and ldeccache[LinkedSource] then
-                                            value = ldeccache[LinkedSource]
-                                            should_decompile = nil
-                                        end
+										if hasLinkedSource then
+											if RecoveredScripts then
+												table.insert(RecoveredScripts, instance:GetFullName())
+											end
 
-        if should_decompile then
-            if DecompileJobless then
-                value = "-- Not found in LinkedSource ScriptCache"
-                should_decompile = nil
-            else
-                -- 2. Tenta baixar o fonte original
-                LinkedSource_type = string.find(LinkedSource, "%a") and "hash" or "id"
-                local asset = LinkedSource_type .. "=" .. LinkedSource
+											LinkedSource = string.match(LinkedSource_Url, "%w+$") -- extract id/hash
 
-                local ok, source = pcall(function()
-                    return game:HttpGet("https://assetdelivery.roproxy.com/v1/asset/?" .. asset)
-                end)
+											if LinkedSource then
+												-- 1. Check cache for the original source
+												if ScriptCache and ldeccache[LinkedSource] then
+													value = ldeccache[LinkedSource]
+													should_decompile = false
+												end
 
-                if ok and filterLinkedSource(source) then
-                    if ScriptCache then
-                        ldeccache[LinkedSource] = source
-                    end
-                    value = source
-                    should_decompile = nil
-                end
-            end
-        end
-    end
-end
+												if should_decompile then
+													if DecompileJobless then
+														value = "-- Not found in LinkedSource ScriptCache"
+														should_decompile = false
+													else
+														-- 2. Try to download the original source
+														LinkedSource_type = string.find(LinkedSource, "%a") and "hash" or "id"
+														local asset = LinkedSource_type .. "=" .. LinkedSource
 
--- Se ainda precisar decompilar (sem fonte original)
-if should_decompile then
-    -- 3. Decompilador principal (definido em ldecompile)
-    value = ldecompile(instance)
+														local fetched, source = pcall(function()
+															return game:HttpGet("https://assetdelivery.roproxy.com/v1/asset/?" .. asset)
+														end)
 
-    -- 4. Se falhou (começa com "--"), tenta decompilador alternativo
-    if value:sub(1,2) == "--" then
-        -- Exemplo: se você tiver outro decompilador, troque pela sua função
-        local alternativeDecompiler = nil -- <- defina aqui se tiver um segundo
-        if alternativeDecompiler then
-            local ok, alt = pcall(alternativeDecompiler, instance)
-            if ok and type(alt) == "string" and alt:sub(1,2) ~= "--" then
-                value = alt
-            end
-        end
-    end
-
-    -- 5. Se ainda falhou e a opção SaveBytecode estiver ativa, anexa bytecode como comentário
-    if value:sub(1,2) == "--" and SaveBytecode then
-        local bytecode = getbytecode and getbytecode(instance)
-        if bytecode then
-            value = "-- Bytecode (Base64):\n-- " .. base64encode(bytecode) .. "\n\n" .. value
-        end
-    end
-end
+														if fetched and filterLinkedSource(source) then
+															if ScriptCache then
+																ldeccache[LinkedSource] = source
+															end
+															value = source
+															should_decompile = false
+														end
+													end
+												end
 											else --if __DEBUG_MODE then -- * We print this anyway because very important
 												warn(
 													"FAILED TO EXTRACT ORIGINAL SCRIPT SOURCE (OPEN A GITHUB ISSUE): ",
@@ -4311,19 +4283,35 @@ end
 											then
 												value = "-- [FilteringEnabled] Server Scripts are IMPOSSIBLE to save"
 											else
+												-- 3. Primary decompiler
 												value = ldecompile(instance)
-												if SaveBytecode then
-													local output = SaveBytecode(instance)
-													if output then
-														value = output .. value
+
+												-- 4. If it failed (starts with "--"), try an alternative decompiler
+												if value:sub(1, 2) == "--" then
+													local alternativeDecompiler = nil -- <- set this if you have a second decompiler
+													if alternativeDecompiler then
+														local altOk, alt = pcall(alternativeDecompiler, instance)
+														if altOk and type(alt) == "string" and alt:sub(1, 2) ~= "--" then
+															value = alt
+														end
+													end
+												end
+
+												-- 5. If it still failed and SaveBytecode is enabled, attach bytecode as a comment
+												if value:sub(1, 2) == "--" and SaveBytecode then
+													local bytecode = getbytecode and getbytecode(instance)
+													if bytecode then
+														value = "-- Bytecode (Base64):\n-- " .. base64encode(bytecode) .. "\n\n" .. value
 													end
 												end
 											end
 										end
 
-										value = "-- lol"
-											.. (hasLinkedSource and "-- Original Source: https://assetdelivery.roblox.com/v1/asset/?" .. (LinkedSource_type or "id") .. "=" .. (LinkedSource or LinkedSource_Url) .. "\n\n" or "")
-											.. value
+										if hasLinkedSource then
+											value = "-- Original Source: https://assetdelivery.roblox.com/v1/asset/?"
+												.. (LinkedSource_type or "id") .. "=" .. (LinkedSource or LinkedSource_Url)
+												.. "\n\n" .. value
+										end
 									end
 								end
 								value = XML_Encoders._protectedString(value)
