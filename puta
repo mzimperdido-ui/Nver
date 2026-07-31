@@ -821,5 +821,3 @@ function SimpleUI:CreateWindow(config)
 end
 
 return SimpleUI
-
-print(1)
