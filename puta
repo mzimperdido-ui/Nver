@@ -1,0 +1,217 @@
+-- SimpleUI Library
+-- Single file version
+
+local SimpleUI = {}
+
+SimpleUI.__index = SimpleUI
+
+
+function SimpleUI:CreateWindow(config)
+
+    local Window = {}
+    Window.__index = Window
+
+    Window.Title = config.Title or "Simple UI"
+    Window.Tabs = {}
+
+    local ScreenGui = Instance.new("ScreenGui")
+    ScreenGui.Name = "SimpleUI"
+    ScreenGui.ResetOnSpawn = false
+
+
+    local Main = Instance.new("Frame")
+    Main.Size = UDim2.fromOffset(500,350)
+    Main.Position = UDim2.fromScale(0.5,0.5)
+    Main.AnchorPoint = Vector2.new(.5,.5)
+    Main.BackgroundColor3 = Color3.fromRGB(25,25,25)
+    Main.BorderSizePixel = 0
+    Main.Parent = ScreenGui
+
+
+    local Title = Instance.new("TextLabel")
+    Title.Size = UDim2.new(1,0,0,40)
+    Title.Text = Window.Title
+    Title.TextColor3 = Color3.new(1,1,1)
+    Title.BackgroundTransparency = 1
+    Title.Font = Enum.Font.GothamBold
+    Title.TextSize = 18
+    Title.Parent = Main
+
+
+    local Container = Instance.new("Frame")
+    Container.Position = UDim2.fromOffset(20,50)
+    Container.Size = UDim2.new(1,-40,1,-70)
+    Container.BackgroundTransparency = 1
+    Container.Parent = Main
+
+
+    local Layout = Instance.new("UIListLayout")
+    Layout.Padding = UDim.new(0,8)
+    Layout.Parent = Container
+
+
+
+    function Window:AddButton(data)
+
+        local Button = Instance.new("TextButton")
+
+        Button.Size = UDim2.new(1,0,0,35)
+        Button.BackgroundColor3 =
+            Color3.fromRGB(45,45,45)
+
+        Button.Text = data.Text or "Button"
+        Button.TextColor3 = Color3.new(1,1,1)
+
+        Button.Font = Enum.Font.Gotham
+        Button.TextSize = 14
+
+        Button.Parent = Container
+
+
+        Button.MouseButton1Click:Connect(function()
+
+            if data.Callback then
+                data.Callback()
+            end
+
+        end)
+
+
+        return Button
+    end
+
+
+
+    function Window:AddToggle(data)
+
+        local State = false
+
+
+        local Toggle = Instance.new("TextButton")
+
+        Toggle.Size = UDim2.new(1,0,0,35)
+        Toggle.BackgroundColor3 =
+            Color3.fromRGB(45,45,45)
+
+        Toggle.Text =
+            (data.Text or "Toggle").." : OFF"
+
+        Toggle.TextColor3 =
+            Color3.new(1,1,1)
+
+        Toggle.Parent = Container
+
+
+
+        Toggle.MouseButton1Click:Connect(function()
+
+            State = not State
+
+
+            Toggle.Text =
+                (data.Text or "Toggle")
+                .." : "
+                ..(State and "ON" or "OFF")
+
+
+            if data.Callback then
+                data.Callback(State)
+            end
+
+        end)
+
+
+        return Toggle
+
+    end
+
+
+
+    function Window:AddLabel(text)
+
+        local Label = Instance.new("TextLabel")
+
+        Label.Size = UDim2.new(1,0,0,30)
+        Label.BackgroundTransparency = 1
+        Label.Text = text
+        Label.TextColor3 =
+            Color3.new(1,1,1)
+
+        Label.Parent = Container
+
+
+        return Label
+    end
+
+
+
+    -- Drag simples
+    local UIS = game:GetService("UserInputService")
+
+    local dragging = false
+    local dragStart
+    local startPos
+
+
+    Title.InputBegan:Connect(function(input)
+
+        if input.UserInputType ==
+        Enum.UserInputType.MouseButton1 then
+
+            dragging = true
+            dragStart = input.Position
+            startPos = Main.Position
+
+        end
+
+    end)
+
+
+    UIS.InputChanged:Connect(function(input)
+
+        if dragging and
+        input.UserInputType ==
+        Enum.UserInputType.MouseMovement then
+
+            local delta =
+                input.Position - dragStart
+
+            Main.Position =
+                UDim2.new(
+                    startPos.X.Scale,
+                    startPos.X.Offset + delta.X,
+                    startPos.Y.Scale,
+                    startPos.Y.Offset + delta.Y
+                )
+
+        end
+
+    end)
+
+
+    UIS.InputEnded:Connect(function(input)
+
+        if input.UserInputType ==
+        Enum.UserInputType.MouseButton1 then
+
+            dragging = false
+
+        end
+
+    end)
+
+
+
+    ScreenGui.Parent = game:GetService("CoreGui")
+
+
+    Window.Gui = ScreenGui
+    Window.Main = Main
+
+
+    return Window
+end
+
+
+
+return SimpleUI
